@@ -1,0 +1,8 @@
+/dist/
+*.exe
+*.out
+coverage.out
+config.local.json
+geosite.dat
+.idea/
+.vscode/
