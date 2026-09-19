@@ -1,0 +1,36 @@
+{
+  "listen": { "host": "127.0.0.1", "port": 1080 },
+  "concurrency": { "enable": true, "workers": 2, "start_port": 1080 },
+  "ssh": {
+    "host": "biznet.vpnstore28.my.id",
+    "port": 443,
+    "username": "hehe",
+    "password": "hehe"
+  },
+  "network": { "type": "tcp" },
+  "transport": { "tls": false, "host": "", "path": "/", "sni": "" },
+  "proxy": { "enable": true, "host": "104.21.83.135", "port": 80 },
+  "payload": {
+    "enable": true,
+    "request": "GET / HTTP/1.1[crlf]Host: edu.ruangguru.com[crlf]Connection: Keep-Alive[crlf][crlf]PATCH / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf][split]HTTP/ 69[crlf][crlf]",
+    "expect": ["200", "101"]
+  },
+  "health": {
+    "degraded_rtt":  800000000,
+    "unhealthy_rtt": 2000000000,
+    "degraded_err":  0.02,
+    "unhealthy_err": 0.10,
+    "degraded_hold": 5000000000,
+    "heal_hold":     10000000000
+  },
+  "socks5": { "max_conns": 2048, "idle_timeout": 20000000000 },
+  "clash_api": {
+    "enable": true,
+    "listen": "127.0.0.1:9090",
+    "secret": "rahasia123",
+    "cors_origins": "*"
+  },
+  "rules": { "geosite_path": "geosite.dat" },
+  "log_level": "info",
+  "known_hosts": ""
+}
