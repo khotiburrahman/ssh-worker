@@ -1,0 +1,98 @@
+mixed-port: 7890
+redir-port: 7892
+allow-lan: true
+bind-address: "*"
+mode: rule
+log-level: info
+ipv6: false
+
+external-controller: 0.0.0.0:9090
+external-ui: ./ui
+secret: "rahasia123"
+
+global-client-fingerprint: chrome
+unified-delay: true
+tcp-concurrent: true
+find-process-mode: strict
+
+sniffer:
+  enable: true
+  sniff:
+    HTTP:
+      ports: [80, 8080-8880]
+    TLS:
+      ports: [443, 8443]
+    QUIC:
+      ports: [443]
+  force-dns-mapping: false
+  parse-pure-ip: true
+
+proxies:
+  - name: "Q-SSH-WORKER"
+    type: socks5
+    server: 127.0.0.1
+    port: 7777
+    udp: true
+
+proxy-groups:
+  - name: "Q-SSH (BETA)"
+    type: select
+    proxies:
+      - "Q-SSH-WORKER"
+      - "DIRECT"
+
+  - name: "Keep-Alive"
+    type: url-test
+    proxies:
+      - "Q-SSH-WORKER"
+    url: http://www.gstatic.com/generate_204
+    interval: 60
+    tolerance: 50
+    lazy: true
+
+dns:
+  enable: true
+  ipv6: false
+  listen: 0.0.0.0:1053
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "time.windows.com"
+    - "pool.ntp.org"
+  default-nameserver: [1.1.1.1, 8.8.8.8, 223.5.5.5]
+  nameserver:
+    - https://dns.google/dns-query
+    - https://1.1.1.1/dns-query
+  proxy-server-nameserver: [8.8.8.8]
+  fallback:
+    - https://1.1.1.1/dns-query
+    - 9.9.9.9
+  fallback-filter:
+    geoip: true
+    ipcidr: [240.0.0.0/4]
+
+rules:
+  # ---- Block ads via GEOSITE ----
+  - GEOSITE,category-ads-all,REJECT
+  - GEOSITE,oisd-full,REJECT
+  - GEOSITE,oisd-small,REJECT
+
+  # ---- Manual blocklist ----
+  - DOMAIN-SUFFIX,facebook.com,REJECT
+  - DOMAIN-SUFFIX,instagram.com,REJECT
+  - DOMAIN-KEYWORD,doubleclick,REJECT
+  - DOMAIN-KEYWORD,ads,REJECT
+
+  # ---- LAN direct ----
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,224.0.0.0/4,DIRECT,no-resolve
+  - IP-CIDR,240.0.0.0/4,DIRECT,no-resolve
+  - DST-PORT,53,DIRECT
+
+  - MATCH,Q-SSH (BETA)
