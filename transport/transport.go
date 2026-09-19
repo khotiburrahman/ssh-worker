@@ -3,7 +3,6 @@ package transport
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"net"
 	"time"
 
