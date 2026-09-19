@@ -1,0 +1,114 @@
+name: Build ARM64
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:      # bisa trigger manual dari UI GitHub
+
+permissions:
+  contents: write         # perlu untuk release
+
+jobs:
+  build-arm64:
+    name: Build linux/arm64
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Tidy modules
+        run: go mod tidy
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Run tests (race + coverage)
+        run: |
+          go test ./... -race -covermode=atomic -coverprofile=coverage.out -timeout 5m
+          go tool cover -func=coverage.out | tail -1
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.out
+
+      - name: Build linux/arm64
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags="-s -w -X main.version=${{ github.ref_name }} -X main.commit=${{ github.sha }}" \
+            -o dist/gosshtunnel-linux-arm64 \
+            .
+
+      - name: Build linux/arm64 (v7 untuk CPU lama)
+        env:
+          GOOS: linux
+          GOARCH: arm
+          GOARM: 7
+          CGO_ENABLED: 0
+        run: |
+          go build -trimpath \
+            -ldflags="-s -w" \
+            -o dist/gosshtunnel-linux-armv7 \
+            .
+
+      - name: Build linux/amd64 (opsional, untuk testing)
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: |
+          go build -trimpath \
+            -ldflags="-s -w" \
+            -o dist/gosshtunnel-linux-amd64 \
+            .
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum gosshtunnel-linux-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gosshtunnel-binaries
+          path: dist/*
+          retention-days: 30
+
+      - name: Create Release (hanya saat tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/gosshtunnel-linux-arm64
+            dist/gosshtunnel-linux-armv7
+            dist/gosshtunnel-linux-amd64
+            dist/SHA256SUMS
