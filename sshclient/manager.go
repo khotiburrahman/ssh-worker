@@ -30,9 +30,13 @@ type Manager struct {
 	keepAlive   time.Duration
 	keepTimeout time.Duration
 
-	state   atomic.Int32
-	client  atomic.Pointer[ssh.Client]
-	sshConn atomic.Pointer[ssh.Conn]
+	state atomic.Int32
+
+	// client & sshConn dilindungi mutex karena keduanya interface
+	// (bukan pointer), jadi tidak bisa pakai atomic.Pointer.
+	connMu  sync.RWMutex
+	client  *ssh.Client
+	sshConn ssh.Conn
 
 	tracker *health.Tracker
 	probe   *health.Probe
@@ -64,7 +68,26 @@ func NewManager(
 		cancel:         cancel,
 	}
 	m.tracker = health.New(healthCfg, log)
-	m.probe = health.NewProbe(m.Dial, m.tracker, log)
+
+	// ProbeFn = (ctx, network, addr); m.Dial = (network, addr).
+	// Bungkus dengan goroutine agar ctx deadline tetap dihormati.
+	m.probe = health.NewProbe(func(pctx context.Context, network, addr string) (net.Conn, error) {
+		type res struct {
+			conn net.Conn
+			err  error
+		}
+		ch := make(chan res, 1)
+		go func() {
+			c, e := m.Dial(network, addr)
+			ch <- res{c, e}
+		}()
+		select {
+		case r := <-ch:
+			return r.conn, r.err
+		case <-pctx.Done():
+			return nil, pctx.Err()
+		}
+	}, m.tracker, log)
 
 	m.tracker.OnDegrade(func(reason string) {
 		m.log.Warn("auto-heal: paksa soft reconnect",
@@ -95,6 +118,37 @@ func (m *Manager) Health() *health.Tracker { return m.tracker }
 func (m *Manager) Healthy() bool           { return m.tracker.Healthy() }
 func (m *Manager) State() State            { return State(m.state.Load()) }
 
+// ---------- accessor thread-safe ----------
+
+func (m *Manager) getClient() *ssh.Client {
+	m.connMu.RLock()
+	defer m.connMu.RUnlock()
+	return m.client
+}
+
+func (m *Manager) getSSHConn() ssh.Conn {
+	m.connMu.RLock()
+	defer m.connMu.RUnlock()
+	return m.sshConn
+}
+
+func (m *Manager) setConn(c *ssh.Client, conn ssh.Conn) {
+	m.connMu.Lock()
+	m.client = c
+	m.sshConn = conn
+	m.connMu.Unlock()
+}
+
+func (m *Manager) clearConn() (c *ssh.Client, conn ssh.Conn) {
+	m.connMu.Lock()
+	c, conn = m.client, m.sshConn
+	m.client, m.sshConn = nil, nil
+	m.connMu.Unlock()
+	return
+}
+
+// ---------- lifecycle ----------
+
 func (m *Manager) Start() error {
 	lg := m.log.Event("ssh.start")
 	lg.Info("connecting", "host", m.cfg.Host, "port", m.cfg.Port, "user", m.cfg.Username)
@@ -113,7 +167,7 @@ func (m *Manager) Start() error {
 
 func (m *Manager) Dial(network, addr string) (net.Conn, error) {
 	lg := m.log.Event("ssh.dial_dest")
-	c := m.client.Load()
+	c := m.getClient()
 	if c == nil || State(m.state.Load()) != StateUp {
 		lg.Warn("dial rejected",
 			"code", logger.CodeSSHDialDest,
@@ -144,7 +198,7 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// ---------------- internal ----------------
+// ---------- internal ----------
 
 func (m *Manager) connect(ctx context.Context) error {
 	lg := m.log.Event("ssh.connect")
@@ -189,8 +243,7 @@ func (m *Manager) connect(ctx context.Context) error {
 		return fmt.Errorf("handshake: %w", err)
 	}
 
-	m.sshConn.Store(sshConn)
-	m.client.Store(ssh.NewClient(sshConn, chans, reqs))
+	m.setConn(ssh.NewClient(sshConn, chans, reqs), sshConn)
 	m.state.Store(int32(StateUp))
 	ok = true
 	done(nil)
@@ -256,11 +309,12 @@ func (m *Manager) markDown() {
 	}
 	m.log.Event("ssh.down").Warn("ssh marked down",
 		"code", logger.CodeSSHDown)
-	if c := m.client.Swap(nil); c != nil {
+	c, conn := m.clearConn()
+	if c != nil {
 		_ = c.Close()
 	}
-	if c := m.sshConn.Swap(nil); c != nil {
-		_ = c.Close()
+	if conn != nil {
+		_ = conn.Close()
 	}
 }
 
@@ -321,7 +375,7 @@ func (m *Manager) supervise() {
 }
 
 func (m *Manager) keepaliveOnce(ctx context.Context) error {
-	c := m.sshConn.Load()
+	c := m.getSSHConn()
 	if c == nil {
 		return errs.ErrNotConnected
 	}
